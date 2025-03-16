@@ -8,5 +8,9 @@ namespace ProxyServer.models
 {
     class LogService
     {
+        public void Log(string message)
+        {
+            // Логирование в файл или консоль
+        }
     }
 }
