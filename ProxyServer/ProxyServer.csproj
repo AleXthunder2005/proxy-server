@@ -46,8 +46,7 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="controllers\CacheController.cs" />
-    <Compile Include="controllers\LogController.cs" />
+    <Compile Include="Settings.cs" />
     <Compile Include="models\CacheService.cs" />
     <Compile Include="models\LogService.cs" />
     <Compile Include="models\ProxyService.cs" />
