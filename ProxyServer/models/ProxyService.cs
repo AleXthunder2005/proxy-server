@@ -14,6 +14,7 @@ using ProxyServer.controllers;
 using System.Windows.Forms;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement;
 using System.Text.RegularExpressions;
+using System.Runtime.InteropServices.ComTypes;
 
 namespace ProxyServer.models
 {
@@ -25,6 +26,7 @@ namespace ProxyServer.models
         private Task _tcpListenerTask;
         private TcpListener _tcpListener;
         private CancellationTokenSource _cancellationTokenSource;
+        private Blocker _blocker;
         private bool _isRunning = false;
 
         public ProxyService(MainForm view, ProxyController controller) 
@@ -38,6 +40,7 @@ namespace ProxyServer.models
             try
             {
                 _isRunning = true;
+                _blocker = new Blocker(_view);
                 _tcpListener = new TcpListener(new IPEndPoint(IPAddress.Any, port));
                 _tcpListener.Start();
                 _cancellationTokenSource = new CancellationTokenSource();
@@ -72,7 +75,8 @@ namespace ProxyServer.models
                 }
                 catch (Exception ex)
                 {
-                    _view.SafeUpdateLog($"{DateTime.Now}: Error - {ex.Message}");
+                    //_view.SafeUpdateLog($"{DateTime.Now}: Error - {ex.Message}");
+                    break ;
                 }
             }
         }
@@ -102,6 +106,11 @@ namespace ProxyServer.models
             if (string.IsNullOrEmpty(host)) return;
 
             //Черный список
+            if (_blocker.IsBlocked(host))
+            {
+                await SendBlockMessageAsync(clientStream);
+                return;
+            }
 
             // получаем остальную информацию запроса
             int port = url.Port;
@@ -112,29 +121,22 @@ namespace ProxyServer.models
             {
                 await server.ConnectAsync(host, port);
                 NetworkStream serverStream = server.GetStream();
-                //serverStream.ReadTimeout = 10000;
+                serverStream.ReadTimeout = 10000;
 
                 requestLines[0] = $"{method} {path} {httpVersion}";// производим замену длинного url на короткий
                 await SendRequestAsync(serverStream, requestLines);
                     
-                server.Client.Shutdown(SocketShutdown.Send);
-
-                string[] responseLines = await ReadLinesFromNetworkStream(serverStream);
-
-                // получаем первую строку 
-                string statusLine = ParseResponseStatus(responseLines[0]);
+                byte[] statusLineBytes = await ReceiveStatusLineAsync(serverStream);
+                string statusLine = Encoding.UTF8.GetString(statusLineBytes);
 
                 _view.SafeUpdateLog($"{DateTime.Now}: {method} {host}{path}:{port} - {statusLine}");
 
-                // отправляем строку пользователю 
-                await SendResponseAsync(clientStream, responseLines);
-
-                // переводим остальные строки
-                await TransmitRequestAsync(serverStream, clientStream);
+                await clientStream.WriteAsync(statusLineBytes, 0, statusLineBytes.Length); //отправили заголовок
+                await TransmitRequestAsync(serverStream, clientStream); //передаем возвращаем оставшуюсю часть клиенту
             }
             catch (Exception ex)
             {
-                    _view.SafeUpdateLog($"{DateTime.Now}: Error - {ex.Message}");
+                   // _view.SafeUpdateLog($"{DateTime.Now}: Error - {ex.Message}");
             }
             finally
             {
@@ -165,11 +167,11 @@ namespace ProxyServer.models
             }
 
             // парсим заголовок на куски
+
             string requestText = Encoding.UTF8.GetString(buffer, 0, buffer.Length);
             string[] requestLines = Regex.Split(requestText, @"\r?\n")
                                          .Where(line => !string.IsNullOrEmpty(line))
                                          .ToArray();
-
             return requestLines;
         }
 
@@ -217,6 +219,48 @@ namespace ProxyServer.models
             }
 
             return sb.ToString();
+        }
+
+        private async Task<byte[]> ReceiveStatusLineAsync(NetworkStream serverStream)
+        {
+            byte[] buffer = new byte[2];
+
+            List<byte> responseLineBytes = new List<byte>(); // Сюда собираем первую строку
+            bool isFirstLineRead = false;
+
+            // Читаем первую строку вручную (до \r\n)
+            while (!isFirstLineRead && await serverStream.ReadAsync(buffer, 0, 1) > 0)
+            {
+                responseLineBytes.Add(buffer[0]);
+
+                // Проверяем конец строки (\r\n)
+                if (responseLineBytes.Count >= 2 &&
+                    responseLineBytes[responseLineBytes.Count - 2] == '\r' &&
+                    responseLineBytes[responseLineBytes.Count - 1] == '\n')
+                {
+                    isFirstLineRead = true;
+                }
+            }
+
+            // Преобразуем байты первой строки ответа в строку
+            return responseLineBytes.ToArray();
+        }
+        private async Task SendBlockMessageAsync(NetworkStream stream)
+        {
+            // получаем длину тела в байтах
+            int contentLength = Encoding.UTF8.GetByteCount(_blocker.ResponseBody);
+            // формируем ответ
+            string response = "HTTP/1.1 403 Forbidden\r\n" +
+                              "Content-Type: text/html; charset=utf-8\r\n" +
+                              $"Content-Length: {contentLength}\r\n" +
+                              "\r\n" +
+                              _blocker.ResponseBody;
+
+            // кодируем в байты ответ
+            byte[] buffer = Encoding.UTF8.GetBytes(response);
+
+            // отправляем ответ клиенту
+            await stream.WriteAsync(buffer, 0, buffer.Length);
         }
 
     }

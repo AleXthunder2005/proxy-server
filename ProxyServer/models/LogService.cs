@@ -30,13 +30,13 @@ namespace ProxyServer.models
             switch (type) 
             { 
                 case LogMessageType.ServerStarted:
-                    message = $"{DateTime.Now}: Proxy server started on port: {DEFAULT_PORT}";
+                    message = $"{DateTime.Now}: Proxy server started on port: {DEFAULT_PORT}\r\n";
                     break;
                 case LogMessageType.ServerStopped:
-                    message = $"{DateTime.Now}: Proxy server stopped";
+                    message = $"{DateTime.Now}: Proxy server stopped\r\n";
                     break;
                 default:
-                    message = $"{DateTime.Now}: Proxy server error";
+                    message = $"{DateTime.Now}: Proxy server error\r\n";
                     break;
             }
 

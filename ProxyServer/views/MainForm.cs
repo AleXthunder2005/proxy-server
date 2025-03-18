@@ -27,7 +27,7 @@ namespace ProxyServer.views
 
         public void UpdateLog(string logMessage)
         {
-            tbLog.Text += $"{logMessage}{Environment.NewLine}";
+            tbLog.Text += logMessage;
         }
 
         public void SafeUpdateLog(string message)
