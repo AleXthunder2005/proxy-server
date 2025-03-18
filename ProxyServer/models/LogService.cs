@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using ProxyServer.views;
+using static ProxyServer.Settings;
 
 namespace ProxyServer.models
 {
@@ -29,7 +30,7 @@ namespace ProxyServer.models
             switch (type) 
             { 
                 case LogMessageType.ServerStarted:
-                    message = $"{DateTime.Now}: Proxy server started";
+                    message = $"{DateTime.Now}: Proxy server started on port: {DEFAULT_PORT}";
                     break;
                 case LogMessageType.ServerStopped:
                     message = $"{DateTime.Now}: Proxy server stopped";

@@ -5,9 +5,11 @@ using System.Data;
 using System.Drawing;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using ProxyServer.controllers;
+using static ProxyServer.Settings;
 
 namespace ProxyServer.views
 {
@@ -19,12 +21,25 @@ namespace ProxyServer.views
         public MainForm()
         {
             InitializeComponent();
+            InitializeSettings();
             _proxyController = new ProxyController(this);
         }
 
         public void UpdateLog(string logMessage)
         {
-            tbLog.AppendText(logMessage + Environment.NewLine);
+            tbLog.Text += $"{logMessage}{Environment.NewLine}";
+        }
+
+        public void SafeUpdateLog(string message)
+        {
+            if (InvokeRequired)
+            {
+                Invoke(new Action(() => UpdateLog(message)));
+            }
+            else
+            {
+                UpdateLog(message);
+            }
         }
 
         private void proxyStartToolStripMenuItem_Click(object sender, EventArgs e)
