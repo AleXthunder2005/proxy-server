@@ -1,4 +1,6 @@
 http://info.cern.ch/
 http://httpforever.com/
 example.com
-https://freshshiningshinypathway.neverssl.com/online/
+http://freshshiningshinypathway.neverssl.com/online/
+
+отключить кэш!

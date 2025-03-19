@@ -27,6 +27,7 @@ namespace ProxyServer.models
         private TcpListener _tcpListener;
         private CancellationTokenSource _cancellationTokenSource;
         private Blocker _blocker;
+        private CacheService _cacheService;
         private bool _isRunning = false;
 
         private const string END_LINE = "\r\n";
@@ -43,6 +44,7 @@ namespace ProxyServer.models
             {
                 _isRunning = true;
                 _blocker = new Blocker(_view);
+                _cacheService = new CacheService(_view);
                 _tcpListener = new TcpListener(new IPEndPoint(IPAddress.Any, port));
                 _tcpListener.Start();
                 _cancellationTokenSource = new CancellationTokenSource();
@@ -91,6 +93,7 @@ namespace ProxyServer.models
             if (requestLines.Length < 1) return;
             string method, requestUrl, httpVersion;
             ParseHTTPStartLine(requestLines[0], out method, out requestUrl, out httpVersion);
+            
             if (!Uri.TryCreate(requestUrl, UriKind.Absolute, out Uri url)) return;
 
             string host = url.Host;
@@ -106,6 +109,14 @@ namespace ProxyServer.models
                 return;
             }
 
+            if (_cacheService.ContainsInCache(requestUrl)) 
+            {
+                byte[] data = _cacheService.GetFromCache(requestUrl);
+                await clientStream.WriteAsync(data, 0, data.Length);
+                _view.SafeUpdateLog($"{DateTime.Now}: {method} {host}{path}:{port} - 200 OK (from cache)\r\n");
+                return;
+            }
+
             TcpClient server = new TcpClient();
             try
             {
@@ -117,24 +128,14 @@ namespace ProxyServer.models
 
                 await SendRequestAsync(serverStream, requestLines);
 
-
-
                 byte[] statusLineBytes = await ReceiveStatusLineAsync(serverStream);
                 string statusLine = Encoding.UTF8.GetString(statusLineBytes);
-
-                //byte[] buffer = new byte[DEFAULT_HTTP_BUFFER_SIZE];
-                //int bytesRead = await serverStream.ReadAsync(buffer, 0, buffer.Length);
-                //string explanation;
-                //int status;
-                //ParseHTTPResponse(buffer, out status, out explanation);
-                //_view.SafeUpdateLog($"{DateTime.Now}: {method} {host}{path}:{port} - {status} {explanation}\r\n");
-                //await clientStream.WriteAsync(buffer, 0, bytesRead); //отправили строку статуса
                 
                 _view.SafeUpdateLog($"{DateTime.Now}: {method} {host}{path}:{port} - {statusLine}");
                 await clientStream.WriteAsync(statusLineBytes, 0, statusLineBytes.Length); //отправили строку статуса
 
                 //if (bytesRead == DEFAULT_HTTP_BUFFER_SIZE)
-                    await TransmitRequestAsync(serverStream, clientStream); //передаем возвращаем оставшуюсю часть клиенту
+                    await TransmitRequestAsync(serverStream, clientStream, method, requestUrl, statusLineBytes); //передаем возвращаем оставшуюсю часть клиенту
             }
             catch (Exception ex)
             {
@@ -151,53 +152,35 @@ namespace ProxyServer.models
             }
         }
 
+        private async Task TransmitRequestAsync(NetworkStream serverStream, NetworkStream clientStream, string method, string url, byte[] statusLineBytes)
+        {
+            string statusLine = Encoding.UTF8.GetString(statusLineBytes);
+            bool needCaching = (!_cacheService.ContainsInCache(url) && (method == "GET") && Int32.Parse(statusLine.Split(' ')[1]) == 200);
+
+            MemoryStream responseStream = new MemoryStream();
+            responseStream.Write(statusLineBytes, 0, statusLineBytes.Length);
+            
+            
+            byte[] buffer = new byte[DEFAULT_HTTP_BUFFER_SIZE];
+            int bytesRead = await serverStream.ReadAsync(buffer, 0, buffer.Length);
+            if (needCaching && bytesRead != DEFAULT_HTTP_BUFFER_SIZE)
+            {
+                responseStream.Write(buffer, 0, bytesRead);
+                _cacheService.AddToCache(url, responseStream.ToArray());
+            }
+
+            do
+            {
+                await clientStream.WriteAsync(buffer, 0, bytesRead);
+            } while ((bytesRead = await serverStream.ReadAsync(buffer, 0, buffer.Length)) > 0);
+        }
+
         private void ParseHTTPStartLine(string startLine, out string method, out string url, out string httpVersion) 
         {
             string[] requestParams = startLine.Split(' ');
             method = requestParams[0];
             url = requestParams[1];
             httpVersion = requestParams[2];
-        }
-
-        private void ParseHTTPResponse(byte[] buffer, out int status, out string explanation)
-        {
-            //<Версия HTTP> <Код статуса> <Пояснение>
-
-            int i = 0;
-            while (buffer[i] != ' ')
-            {
-                i++;
-            }
-            i++;
-
-            //отделение статуса
-
-            byte[] statusBytes = new byte[10];
-            int size = 0;
-            int j = 0;
-            while (buffer[i] != ' ')
-            {
-                statusBytes[j] = (byte)buffer[i];
-                i++;
-                j++;
-                size++;
-            }
-            status = Int32.Parse(Encoding.UTF8.GetString(statusBytes, 0, size));
-            i++;
-
-            //------------------------------------------------------------------
-
-            size = 0;
-            j = 0;
-            byte[] explanationBytes = new byte[DEFAULT_EXPLANATION_SIZE];
-            while (buffer[i] != '\r' && buffer[i] != '\n')  //поиск пояснения
-            {
-                explanationBytes[j] = (byte)buffer[i];
-                i++;
-                j++;
-                size++;
-            }
-            explanation = Encoding.UTF8.GetString(explanationBytes, 0, size);
         }
 
         private async Task<string[]> ReadLinesFromNetworkStream(NetworkStream clientStream)
@@ -248,17 +231,7 @@ namespace ProxyServer.models
             await stream.WriteAsync(Encoding.UTF8.GetBytes("\r\n"), 0, 2);
         }
 
-        private async Task TransmitRequestAsync(NetworkStream serverStream, NetworkStream clientStream)
-        {
-            byte[] buffer = new byte[DEFAULT_HTTP_BUFFER_SIZE];
-            int bytesRead;
 
-            // Читаем ответ от сервера и отправляем клиенту
-            while ((bytesRead = await serverStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
-            {
-                await clientStream.WriteAsync(buffer, 0, bytesRead);
-            }
-        }
 
         private string ParseResponseStatus(string responseStatus)
         {
