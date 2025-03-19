@@ -29,6 +29,8 @@ namespace ProxyServer.models
         private Blocker _blocker;
         private bool _isRunning = false;
 
+        private const string END_LINE = "\r\n";
+
         public ProxyService(MainForm view, ProxyController controller) 
         { 
             _view = view;
@@ -84,55 +86,55 @@ namespace ProxyServer.models
         private async Task HandleClientAsync(TcpClient client)
         {
             NetworkStream clientStream = client.GetStream();
-
-            // получаем запрос в виде массива строк
             string[] requestLines = await ReadLinesFromNetworkStream(clientStream);
 
             if (requestLines.Length < 1) return;
-
-            // получаем данные заголовка
-            string[] requestParams = requestLines[0].Split(' ');
-            if (requestParams.Length < 3) return; // проверяем на количество параметров
-
-            // формируем параметры
-            string method = requestParams[0];
-            string requestUrl = requestParams[1];
-            string httpVersion = requestParams[2];
-
-            // создаем полный Uri
+            string method, requestUrl, httpVersion;
+            ParseHTTPStartLine(requestLines[0], out method, out requestUrl, out httpVersion);
             if (!Uri.TryCreate(requestUrl, UriKind.Absolute, out Uri url)) return;
 
             string host = url.Host;
+            int port = url.Port;
+            string path = url.PathAndQuery;
             if (string.IsNullOrEmpty(host)) return;
 
             //Черный список
             if (_blocker.IsBlocked(host))
             {
                 await SendBlockMessageAsync(clientStream);
+                _view.SafeUpdateLog($"{DateTime.Now}: {method} {host}{path}:{port} - 403 Forbidden\r\n");
                 return;
             }
-
-            // получаем остальную информацию запроса
-            int port = url.Port;
-            string path = url.PathAndQuery;
 
             TcpClient server = new TcpClient();
             try
             {
                 await server.ConnectAsync(host, port);
                 NetworkStream serverStream = server.GetStream();
-                serverStream.ReadTimeout = 10000;
+                serverStream.ReadTimeout = 1000;
 
                 requestLines[0] = $"{method} {path} {httpVersion}";// производим замену длинного url на короткий
+
                 await SendRequestAsync(serverStream, requestLines);
-                    
+
+
+
                 byte[] statusLineBytes = await ReceiveStatusLineAsync(serverStream);
                 string statusLine = Encoding.UTF8.GetString(statusLineBytes);
 
+                //byte[] buffer = new byte[DEFAULT_HTTP_BUFFER_SIZE];
+                //int bytesRead = await serverStream.ReadAsync(buffer, 0, buffer.Length);
+                //string explanation;
+                //int status;
+                //ParseHTTPResponse(buffer, out status, out explanation);
+                //_view.SafeUpdateLog($"{DateTime.Now}: {method} {host}{path}:{port} - {status} {explanation}\r\n");
+                //await clientStream.WriteAsync(buffer, 0, bytesRead); //отправили строку статуса
+                
                 _view.SafeUpdateLog($"{DateTime.Now}: {method} {host}{path}:{port} - {statusLine}");
+                await clientStream.WriteAsync(statusLineBytes, 0, statusLineBytes.Length); //отправили строку статуса
 
-                await clientStream.WriteAsync(statusLineBytes, 0, statusLineBytes.Length); //отправили заголовок
-                await TransmitRequestAsync(serverStream, clientStream); //передаем возвращаем оставшуюсю часть клиенту
+                //if (bytesRead == DEFAULT_HTTP_BUFFER_SIZE)
+                    await TransmitRequestAsync(serverStream, clientStream); //передаем возвращаем оставшуюсю часть клиенту
             }
             catch (Exception ex)
             {
@@ -147,6 +149,55 @@ namespace ProxyServer.models
                 client.Close();
                 client.Dispose();
             }
+        }
+
+        private void ParseHTTPStartLine(string startLine, out string method, out string url, out string httpVersion) 
+        {
+            string[] requestParams = startLine.Split(' ');
+            method = requestParams[0];
+            url = requestParams[1];
+            httpVersion = requestParams[2];
+        }
+
+        private void ParseHTTPResponse(byte[] buffer, out int status, out string explanation)
+        {
+            //<Версия HTTP> <Код статуса> <Пояснение>
+
+            int i = 0;
+            while (buffer[i] != ' ')
+            {
+                i++;
+            }
+            i++;
+
+            //отделение статуса
+
+            byte[] statusBytes = new byte[10];
+            int size = 0;
+            int j = 0;
+            while (buffer[i] != ' ')
+            {
+                statusBytes[j] = (byte)buffer[i];
+                i++;
+                j++;
+                size++;
+            }
+            status = Int32.Parse(Encoding.UTF8.GetString(statusBytes, 0, size));
+            i++;
+
+            //------------------------------------------------------------------
+
+            size = 0;
+            j = 0;
+            byte[] explanationBytes = new byte[DEFAULT_EXPLANATION_SIZE];
+            while (buffer[i] != '\r' && buffer[i] != '\n')  //поиск пояснения
+            {
+                explanationBytes[j] = (byte)buffer[i];
+                i++;
+                j++;
+                size++;
+            }
+            explanation = Encoding.UTF8.GetString(explanationBytes, 0, size);
         }
 
         private async Task<string[]> ReadLinesFromNetworkStream(NetworkStream clientStream)
@@ -169,8 +220,7 @@ namespace ProxyServer.models
             // парсим заголовок на куски
 
             string requestText = Encoding.UTF8.GetString(buffer, 0, buffer.Length);
-            string[] requestLines = Regex.Split(requestText, @"\r?\n")
-                                         .Where(line => !string.IsNullOrEmpty(line))
+            string[] requestLines = Regex.Split(requestText, @"\r\n")
                                          .ToArray();
             return requestLines;
         }
@@ -179,7 +229,9 @@ namespace ProxyServer.models
         {
             foreach (var requestLine in requestLines)
             {
-                byte[] lineBytes = Encoding.UTF8.GetBytes(requestLine + "\r\n");
+                if (string.IsNullOrEmpty(requestLine)) break;
+
+                byte[] lineBytes = Encoding.UTF8.GetBytes(requestLine + (requestLine == "\r\n" ? "" : "\r\n"));
                 await stream.WriteAsync(lineBytes, 0, lineBytes.Length);
             }
             await stream.WriteAsync(Encoding.UTF8.GetBytes("\r\n"), 0, 2);

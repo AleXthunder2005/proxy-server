@@ -40,7 +40,6 @@ namespace ProxyServer.views
                 File.WriteAllLines(path, lines);
                 UpdateBlackList(lines);
 
-                
                 this.DialogResult = DialogResult.OK;
                 this.Close();
             }
